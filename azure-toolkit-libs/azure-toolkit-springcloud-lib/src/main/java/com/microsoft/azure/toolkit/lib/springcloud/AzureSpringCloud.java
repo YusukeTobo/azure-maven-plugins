@@ -26,26 +26,29 @@ import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.App
 import com.microsoft.azure.toolkit.lib.Azure;
 import com.microsoft.azure.toolkit.lib.AzureConfiguration;
 import com.microsoft.azure.toolkit.lib.AzureService;
+import com.microsoft.azure.toolkit.lib.SubscriptionScoped;
 import com.microsoft.azure.toolkit.lib.auth.Account;
 import com.microsoft.azure.toolkit.lib.auth.AzureAccount;
+import com.microsoft.azure.toolkit.lib.cache.Cacheable;
+import com.microsoft.azure.toolkit.lib.common.model.Subscription;
 import com.microsoft.azure.toolkit.lib.springcloud.service.SpringCloudClusterManager;
 import com.microsoft.rest.LogLevel;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 
 import javax.annotation.Nonnull;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
-public class AzureSpringCloud implements AzureService {
-    private final Account account;
-
+public class AzureSpringCloud extends SubscriptionScoped<AzureSpringCloud> implements AzureService {
     public AzureSpringCloud() {
-        this.account = Azure.az(AzureAccount.class).account();
+        super(Scoped::new);
     }
 
     @Nonnull
     public SpringCloudCluster cluster(@Nonnull SpringCloudClusterEntity cluster) {
-        final AppPlatformManager client = this.getAppPlatformManager(cluster.getSubscriptionId());
+        final AppPlatformManager client = this.getClient(cluster.getSubscriptionId());
         return new SpringCloudCluster(cluster, client);
     }
 
@@ -56,22 +59,29 @@ public class AzureSpringCloud implements AzureService {
     }
 
     public List<SpringCloudCluster> clusters() {
-        return this.account.getSelectedSubscriptions().stream()
-            .map(s -> getAppPlatformManager(s.getId()))
+        return this.getSubscriptions().stream()
+            .map(s -> getClient(s.getId()))
             .map(SpringCloudClusterManager::new)
             .flatMap(m -> m.getAll().stream())
             .map(this::cluster)
             .collect(Collectors.toList());
     }
 
-    private AppPlatformManager getAppPlatformManager(final String subscriptionId) {
-        // TODO: cache AppPlatformManager since authenticate is slow.
+    @Cacheable(cacheName = "AppPlatformManager", key = "$subscriptionId")
+    protected AppPlatformManager getClient(final String subscriptionId) {
+        final Account account = Azure.az(AzureAccount.class).account();
         final AzureConfiguration config = Azure.az().config();
         final LogLevel logLevel = config.getLogLevel();
         final String userAgent = config.getUserAgent();
         return AppPlatformManager.configure()
             .withLogLevel(logLevel)
             .withUserAgent(userAgent)
-            .authenticate(this.account.getTokenCredentialV1(subscriptionId), subscriptionId);
+            .authenticate(account.getTokenCredentialV1(subscriptionId), subscriptionId);
+    }
+
+    @Getter
+    @RequiredArgsConstructor
+    private static class Scoped extends AzureSpringCloud {
+        private final List<Subscription> subscriptions;
     }
 }
